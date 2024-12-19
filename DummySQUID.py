@@ -178,6 +178,8 @@ class SQUID_Balancer_v2(Procedure):
         }
         self.emit('results', data)        
 
+    # def cancellation_adjust(self):
+
     def execute(self):
         lockin = self.lockin
         afg = self.afg
@@ -208,24 +210,8 @@ class SQUID_Balancer_v2(Procedure):
                         afg.ch1.amp_vrms = self.amp
                         afg.ch1.phase_rad = self.phase
                         
-                        self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
-                        self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant
+                        self.data_record()
 
-                        self.temp = chi_to_T(self.chi_re)
-                        
-                        data = {
-                            'UTC': time.time() +2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,
-                            'timestamp': time.time()-self.t0,
-                            'tek_nx' : self.tek_nx,
-                            'tek_ny': self.tek_ny,
-                            'X': lockin.x,
-                            'Y': lockin.y,
-                            'Tek amp': afg.ch1.amp_vrms,#self.amp,
-                            'Tek phase': afg.ch1.phase_deg,#self.phase*180/pi,
-                            'chi\'': self.chi_re,
-                            'chi\'\'': self.chi_im 
-                        }
-                        self.emit('results', data)
                         log.debug('Lowering SQUID x output')
                         sleep(self.increment_sleep)
 
@@ -247,25 +233,8 @@ class SQUID_Balancer_v2(Procedure):
                         afg.ch1.amp_vrms = self.amp
                         afg.ch1.phase_rad = self.phase
                         
-                        self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
-                        self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant
+                        self.data_record()
 
-                        self.temp = chi_to_T(self.chi_re)
-
-                        data = {
-                            'UTC' : time.time()+2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,,
-                            'timestamp': time.time()-self.t0,
-                            'Temperature': self.temp,
-                            'tek_nx' : self.tek_nx,
-                            'tek_ny': self.tek_ny,
-                            'X': lockin.x,
-                            'Y': lockin.y,
-                            'Tek amp': afg.ch1.amp_vrms,
-                            'Tek phase': afg.ch1.phase_deg,
-                            'chi\'': self.chi_re,
-                            'chi\'\'': self.chi_im 
-                        }
-                        self.emit('results', data)
                         log.debug('Raising SQUID output')
                         sleep(self.increment_sleep)
                         sleep(self.delay)
@@ -291,25 +260,8 @@ class SQUID_Balancer_v2(Procedure):
                         afg.ch1.amp_vrms = self.amp
                         afg.ch1.phase_rad = self.phase
                         
-                        self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
-                        self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant
+                        self.data_record()
 
-                        self.temp = chi_to_T(self.chi_re)
-
-                        data = {
-                            'UTC': time.time()+2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,
-                            'timestamp': time.time()-self.t0,
-                            'Temperature': self.temp,
-                            'tek_nx' : self.tek_nx,
-                            'tek_ny': self.tek_ny,
-                            'X': lockin.x,
-                            'Y': lockin.y,
-                            'Tek amp': afg.ch1.amp_vrms,
-                            'Tek phase': afg.ch1.phase_deg,
-                            'chi\'': self.chi_re,
-                            'chi\'\'': self.chi_im 
-                        }
-                        self.emit('results', data)
                         log.debug('Lowering SQUID y output')
                         sleep(self.increment_sleep)
 
@@ -330,26 +282,9 @@ class SQUID_Balancer_v2(Procedure):
                         
                         afg.ch1.amp_vrms = self.amp
                         afg.ch1.phase_rad = self.phase
-                        
-                        self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
-                        self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant
 
-                        self.temp = chi_to_T(self.chi_re)
+                        self.data_record()
 
-                        data = {
-                            'UTC' : time.time()+2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,
-                            'timestamp': time.time()-self.t0,
-                            'Temperature': self.temp,
-                            'tek_nx' : self.tek_nx,
-                            'tek_ny': self.tek_ny,
-                            'X': lockin.x,
-                            'Y': lockin.y,
-                            'Tek amp': afg.ch1.amp_vrms,
-                            'Tek phase': afg.ch1.phase_deg,
-                            'chi\'': self.chi_re,
-                            'chi\'\'': self.chi_im 
-                        }
-                        self.emit('results', data)
                         log.debug('Raising y SQUID output')
                         sleep(self.increment_sleep)
                         sleep(self.delay)
@@ -358,26 +293,8 @@ class SQUID_Balancer_v2(Procedure):
                 self.x_buffer.append(lockin.x)
                 self.y_buffer.append(lockin.y)
 
-                self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
-                self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant
+                self.data_record()
 
-                self.temp = chi_to_T(self.chi_re)
-
-                data = {
-                    'UTC': time.time()+2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,
-                    'timestamp': time.time()-self.t0,
-                    'Temperature': self.temp,
-                    'tek_nx' : self.tek_nx,
-                    'tek_ny': self.tek_ny,
-                    'X': lockin.x,
-                    'Y': lockin.y,
-                    'Tek amp': afg.ch1.amp_vrms,
-                    'Tek phase': afg.ch1.phase_deg,
-                    'chi\'': self.chi_re,
-                    'chi\'\'': self.chi_im 
-                }
-                
-                self.emit('results', data)
                 log.debug('Lowering SQUID output')
                 sleep(self.delay)
             
