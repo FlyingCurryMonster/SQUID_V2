@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from utils import FixedSizeBuffer
 
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
@@ -47,7 +48,7 @@ class SQUID_Balancer_v2(Procedure):
     cancel_gain = FloatParameter('cancellation gain', default = 1)
     squid_range = FloatParameter('SQUID output/Lockin input limit',units= 'V', default = 1.5E-3) #the max range on the lockin
     increment_voltage = FloatParameter('Increment voltage', units = 'V', default = 1E-3)
-    rebalance_delay = IntegerParameter('Re-balance buffer count', default = 30)
+    buffer_size = IntegerParameter('Re-balance buffer count', default = 30)
     increment_sleep = FloatParameter('Increment sleep', units = 's', default = 5)
 
 
@@ -63,7 +64,7 @@ class SQUID_Balancer_v2(Procedure):
                     'increment_voltage',
                     'squid_range',
                     'increment_sleep',
-                    'rebalance_delay',
+                    'buffer_size',
                     'teksr_gain',
                     'sr830addr',
                     'afgaddr',
@@ -108,30 +109,35 @@ class SQUID_Balancer_v2(Procedure):
             sleep(0.5)
 
     #log.info('SQUID_Balancer has been called')
+
+    def lockin_single_measure(self, lockin_amp:SR830):
+        # need to add outupt conversion implementation
+        x, y = lockin_amp.xy
+        return x, y
+    
+    def lockin_buffer_measure(self, lockin_amp:SR830):
+
+        return
+
     def startup(self):
-        SR830_full_address = f'GPIB{self.sr830addr}::INSTR'
-        afg_full_address = f'GPIB{self.afgaddr}::INSTR'
+        log.info('Starting dummy squid balancer')        
+        self.lockin = SR830(f'GPIB{self.sr830addr}::INSTR')
+        self.afg = AFG3152C(f'GPIB{self.afgaddr}::INSTR')
 
-        log.info('Starting dummy squid balancer')
-        self.x_buffer = []
-        self.y_buffer = []
+        self.x_buffer = FixedSizeBuffer(size=self.buffer_size)
+        self.y_buffer = FixedSizeBuffer(size=self.buffer_size)
 
-        self.lockin = SR830(SR830_full_address)
-        self.afg = AFG3152C(afg_full_address)
-
-        # self.lockin.sine_voltage = self.drive_V
-        log.info('Drive voltage has been set to = {}'.format(self.lockin.sine_voltage))
-        # self.chi_norm_constant = 5/self.lockin.sine_voltage
-
-        #self.x_buffer.append(self.lockin.x)
-        #self.y_buffer.append(self.lockin.y)
         log.info('filling the buffer')
-        self.buffer_fill()
+        
+        for i in range(self.x_buffer.size):
+            x, y = self.lockin_single_measure(self.lockin)
+            self.x_buffer.append(x)
+            self.y_buffer.append(y)
+
         log.info('buffer filled')
-        log.info('X buffer:')
-        log.info(self.x_buffer)
+        log.info('X buffer mean: {:.3g}, median: {:.3g}, std_dev: {:.3g}'.format(**self.x_buffer.compute_statistics()))
         log.info('Y buffer:')
-        log.info(self.y_buffer)
+        log.info('Y buffer mean: {:.3g}, median: {:.3g}, std_dev: {:.3g}'.format(**self.y_buffer.compute_statistics()))
 
         self.tek_nx = 0
         self.tek_ny = 0
@@ -156,7 +162,7 @@ class SQUID_Balancer_v2(Procedure):
         self.t0 = time.time()
     
     def data_record(self):
-        x, y = self.lockin.xy
+        x, y = self.lockin_single_measure(self.lockin)
         x_cancel = self.amp * cos(self.phase)
         y_cancel = self.amp * sin(self.phase) 
         chi_real = x + x_cancel * self.cancel_gain * self.teksr_gain
@@ -164,138 +170,115 @@ class SQUID_Balancer_v2(Procedure):
 
         # self.chi_re = (lockin.x + self.cancel_gain*gain*self.amp*cos(self.phase))*self.chi_norm_constant
         # self.chi_im = (lockin.y + self.cancel_gain*gain*self.amp*sin(self.phase))*self.chi_norm_constant        
-        data = {
+        self.data = {
             'UTC': time.time() +2082844800, #the extra constant is to match Laview's timestamp start of 01/01/1904,
             'timestamp': time.time()-self.t0,
-            'tek_nx' : self.tek_nx,
-            'tek_ny': self.tek_ny,
             'X': x,
             'Y': y,
+            'lockin_drive': self.lockin.sine_voltage,
+            'tek_nx' : self.tek_nx,
+            'tek_ny': self.tek_ny,
             'X_cancel': x_cancel,
             'Y_cancel': y_cancel,#self.phase*180/pi,
             'chi_real': chi_real,
             'chi_imag': chi_imag 
         }
-        self.emit('results', data)        
+        self.emit('results', self.data)        
 
+    def adjust_cancellation(self):
+        x_cancel = self.initial_amp * cos(self.initial_phase) + self.tek_nx * self.amp_increment
+        y_cancel = self.initial_amp * sin(self.initial_phase) + self.tek_ny * self.amp_increment
+        phasor = complex(x_cancel, y_cancel)
+        amp = abs(phasor)
+        phase = cmath.phase(self.phasor)
+        
+        self.afg.ch1.amp_vrms = amp
+        self.afg.ch1.phase_rad = phase
     # def cancellation_adjust(self):
 
     def execute(self):
         lockin = self.lockin
         afg = self.afg
-        gain = self.gain
         
         while True:
-            
-            self.lockin_drive = self.lockin.sine_voltage
             self.x_buffer.append(lockin.x)
             self.y_buffer.append(lockin.y)
-            ###### ####### ####### ####### ####### ####### X CHANNEL ####### ####### ####### ####### ####### ####### ####### #######
-            if all(abs(reading)>1.2*self.squid_range for reading in self.x_buffer[-1*self.rebalance_delay:]): #x_buffer used for x balancing
-                log.info('Lockin X is out of squid_range')
-                log.info(self.x_buffer[-1*self.rebalance_delay:])
-                if lockin.x > 0:
+            
+            x_tape = np.array(self.x_buffer)
+            y_tape = np.array(self.y_buffer)
+            range_bound_multiplier = 1.2
+            x_outof_range = np.all(np.abs(x_tape) > range_bound_multiplier * self.squid_range)
+            y_outof_range = np.all(np.abs(y_tape) > range_bound_multiplier * self.squid_range)
+
+            if x_outof_range: #x_buffer used for x balancing
+                log.info('Lockin X is out of squid_range')                
+                if np.median(x_tape) > 0:
                     log.info('Lockin X channel is large and positive')
-                    while lockin.x > -0.8*self.squid_range:
-                        self.x_buffer.append(lockin.x)
-                        self.y_buffer.append(lockin.y)
+                    while lockin.x > -0.8 * self.squid_range:
+                        # self.x_buffer.append(lockin.x)
+                        # self.y_buffer.append(lockin.y)
 
                         self.tek_nx = self.tek_nx + 1
-                        self.x_comp = self.initial_amp*cos(self.initial_phase) + self.tek_nx*self.amp_increment
-                        self.y_comp = self.initial_amp*sin(self.initial_phase) + self.tek_ny*self.amp_increment
-                        self.phasor = complex(self.x_comp, self.y_comp)
-                        self.amp = abs(self.phasor)
-                        self.phase = cmath.phase(self.phasor)
-  
-                        afg.ch1.amp_vrms = self.amp
-                        afg.ch1.phase_rad = self.phase
-                        
+                        self.adjust_cancellation()
                         self.data_record()
 
-                        log.debug('Lowering SQUID x output')
+                        log.debug('RAISING X cancellation')
                         sleep(self.increment_sleep)
-
                         sleep(self.delay)
                           
-                elif lockin.x < 0:
+                elif np.median(x_tape) < 0:
                     log.info('Lockin X channel is large and negative')
                     while lockin.x < 0.8*self.squid_range:
-                        self.x_buffer.append(lockin.x)
-                        self.y_buffer.append(lockin.y)
+                        # self.x_buffer.append(lockin.x)
+                        # self.y_buffer.append(lockin.y)
 
                         self.tek_nx = self.tek_nx-1
-                        self.x_comp = self.initial_amp*cos(self.initial_phase) + self.tek_nx*self.amp_increment
-                        self.y_comp = self.initial_amp*sin(self.initial_phase) + self.tek_ny*self.amp_increment
-                        self.phasor = complex(self.x_comp, self.y_comp)
-                        self.amp = abs(self.phasor)
-                        self.phase = cmath.phase(self.phasor)
-                        
-                        afg.ch1.amp_vrms = self.amp
-                        afg.ch1.phase_rad = self.phase
-                        
+                        self.adjust_cancellation()
                         self.data_record()
 
-                        log.debug('Raising SQUID output')
+                        log.debug('LOWERING X cancellation')
                         sleep(self.increment_sleep)
-                        sleep(self.delay)
-                        
-            ###### ####### ####### ####### ####### ####### Y CHANNEL ####### ####### ####### ####### ####### ####### ####### #######
-            elif all(abs(reading) > 1.2*self.squid_range for reading in self.y_buffer[-1*self.rebalance_delay:]):
-                 log.info('Lockin Y channel is out of squid_range')
-                 log.info(self.y_buffer[-1*self.rebalance_delay:])
-                 if lockin.y > 0:
+                        sleep(self.delay)   
+            
+                self.x_buffer.append(self.data['X'])
+                self.y_buffer.append(self.data['Y'])
+
+            if y_outof_range:
+                log.info('Lockin Y channel is out of squid_range')
+                #  log.info(self.y_buffer[-1*self.rebalance_delay:])
+                if np.median(y_tape) > 0:
                     log.info('Lockin Y channel is large and positive')
-                    while lockin.x > -0.8*self.squid_range:
+                    while lockin.y > -0.8*self.squid_range:
                         self.x_buffer.append(lockin.x)
                         self.y_buffer.append(lockin.y)
 
                         self.tek_ny = self.tek_ny + 1
-                        self.x_comp = self.initial_amp*cos(self.initial_phase) + self.tek_nx*self.amp_increment
-                        self.y_comp = self.initial_amp*sin(self.initial_phase) + self.tek_ny*self.amp_increment
-                        self.phasor = complex(self.x_comp, self.y_comp)
-                        self.amp = abs(self.phasor)
-                        self.phase = cmath.phase(self.phasor)
-
-                        
-                        afg.ch1.amp_vrms = self.amp
-                        afg.ch1.phase_rad = self.phase
-                        
+                        self.adjust_cancellation()
                         self.data_record()
 
-                        log.debug('Lowering SQUID y output')
+                        log.debug('RAISING Y cancellation ')
                         sleep(self.increment_sleep)
-
                         sleep(self.delay)
                           
-                 elif lockin.y < 0:
+                elif np.median(y_tape) < 0:
                     log.info('Lockin Y channel is large and negative')
-                    while lockin.x < 0.8*self.squid_range:
+                    while lockin.y < 0.8*self.squid_range:
                         self.x_buffer.append(lockin.x)
                         self.y_buffer.append(lockin.y)
 
                         self.tek_ny = self.tek_ny-1
-                        self.x_comp = self.initial_amp*cos(self.initial_phase) + self.tek_nx*self.amp_increment
-                        self.y_comp = self.initial_amp*sin(self.initial_phase) + self.tek_ny*self.amp_increment
-                        self.phasor = complex(self.x_comp, self.y_comp)
-                        self.amp = abs(self.phasor)
-                        self.phase = cmath.phase(self.phasor)
-                        
-                        afg.ch1.amp_vrms = self.amp
-                        afg.ch1.phase_rad = self.phase
-
+                        self.adjust_cancellation()
                         self.data_record()
 
-                        log.debug('Raising y SQUID output')
+                        log.debug('LOWERING Y cancellation')
                         sleep(self.increment_sleep)
                         sleep(self.delay)
-                                       
+
             else:
-                self.x_buffer.append(lockin.x)
-                self.y_buffer.append(lockin.y)
-
                 self.data_record()
-
-                log.debug('Lowering SQUID output')
+                self.x_buffer.append(self.data['X'])
+                self.y_buffer.append(self.data['Y'])  
+                log.debug('Cancellation unchanged')
                 sleep(self.delay)
             
             if self.should_stop():
@@ -345,9 +328,8 @@ class LockinOutput(ManagedWindow):
                 ChiPlot,
             )
         )
-        self.setWindowTitle('LCMN SQUID balancer')
-        #D:\Data\LCMN SQUID
-        self.directory = r'D:/Data/LCMN SQUID/'  
+        self.setWindowTitle('SQUID dummy balancer')
+        self.directory = r'D:/Data/SQUID-Dummy/'  
     
     def queue(self):
         directory = self.directory
