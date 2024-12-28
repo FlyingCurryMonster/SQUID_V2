@@ -107,10 +107,27 @@ class SQUID_Balancer_v2(Procedure):
 
         return
 
+    def tek_signal_query(self, tek_afg:AFG3152C, phase_units='rad'):
+        # need to include assertion error for phase_units
+        state = True
+        while state:
+            try: 
+                amp = tek_afg.ch1.amp_vrms
+                if phase_units=='rad':
+                    phase = tek_afg.ch1.phase_rad
+                else:
+                    phase = tek_afg.ch1.phase_deg
+                state = False
+            except Exception as e:
+                log.warning(e)
+                time.sleep(0.1)
+        return amp, phase
+
     def data_record(self):
         x, y = self.SR830_single_measure(self.lockin)
-        amp = self.afg.ch1.amp_vrms
-        phase = self.afg.ch1.phase_rad
+        # amp = self.afg.ch1.amp_vrms
+        # phase = self.afg.ch1.phase_rad
+        amp, phase = self.tek_signal_query(self.afg)
         x_cancel = amp * cos(phase)
         y_cancel = amp * sin(phase) 
         signal_x = x + x_cancel * self.cancel_gain * self.teksr_gain
@@ -141,6 +158,16 @@ class SQUID_Balancer_v2(Procedure):
         self.afg.ch1.amp_vrms = amp
         self.afg.ch1.phase_rad = phase
 
+    def log_cancellation(self):
+        Xlog, Ylog = self.data['X_cancel'], self.data['Y_cancel']
+        Rlog = (Xlog**2 + Ylog**2)**0.5
+        philog = np.arctan(Ylog/Xlog) * 180 / pi
+
+        # `log` is a GLOBAL variable
+        log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(Rlog, philog))
+        log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(Xlog, Ylog))        
+        return        
+
     def startup(self):
         log.info('Starting dummy squid balancer')        
         self.lockin = SR830(f'GPIB{self.sr830addr}::INSTR')
@@ -160,14 +187,15 @@ class SQUID_Balancer_v2(Procedure):
 
         log.info('buffer filled')
 
-        self.initial_amp = self.afg.ch1.amp_vrms
-        self.initial_phase = self.afg.ch1.phase_rad
+        # self.initial_amp = self.afg.ch1.amp_vrms
+        # self.initial_phase = self.afg.ch1.phase_rad
+        self.initial_amp, self.initial_phase = self.tek_signal_query(self.afg, 'deg')
         xcancel_initial = self.initial_amp * cos(self.initial_phase)
         ycancel_initial = self.initial_amp * sin(self.initial_phase)
         self.tek_nx = 0
         self.tek_ny = 0
-        log.info(f'Initial (R, phi (deg)): ({self.initial_amp}, {self.initial_phase * 180/pi})')
-        log.info('Initial (X, Y): ({:.3g}, {:.3g})'.format(xcancel_initial, ycancel_initial))
+        log.info('Initial (R, phi): ({:}V, {:.3g}deg)'.format(self.initial_amp, self.initial_phase))
+        log.info('Initial (X, Y): ({:.3g}V, {:.3g}V)'.format(xcancel_initial, ycancel_initial))
         self.adjust_cancellation()
 
         self.t0 = time.time()
@@ -205,9 +233,11 @@ class SQUID_Balancer_v2(Procedure):
                         sleep(self.delay)
                         if self.should_stop():
                             log.warning('Caught the stop flag in the procedure')
-                            break                        
-                    log.info('Cancellation (R, phi (deg)) = ({:}, {:.3g})'.format(self.afg.ch1.amp_vrms, self.afg.ch1.phase_rad*180/pi))
-                    log.info('Cancellation (X, Y) = ({:.3g}, {:.3g})'.format(self.data['X_cancel'], self.data['Y_cancel']))
+                            break
+
+                    self.log_cancellation()
+                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
+                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 elif np.median(x_tape) < 0:
                     log.info('Lockin X channel is large and negative')
@@ -227,9 +257,11 @@ class SQUID_Balancer_v2(Procedure):
                         sleep(self.delay)   
                         if self.should_stop():
                             log.warning('Caught the stop flag in the procedure')
-                            break                        
-                    log.info('Cancellation (R, phi (deg)) = ({:}, {:.3g})'.format(self.afg.ch1.amp_vrms, self.afg.ch1.phase_rad*180/pi))
-                    log.info('Cancellation (X, Y) = ({:.3g}, {:.3g})'.format(self.data['X_cancel'], self.data['Y_cancel']))
+                            break
+
+                    self.log_cancellation()
+                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
+                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 self.x_cancelbuffer.append(self.data['X'])
                 self.y_cancelbuffer.append(self.data['Y'])
@@ -257,8 +289,10 @@ class SQUID_Balancer_v2(Procedure):
                         if self.should_stop():
                             log.warning('Caught the stop flag in the procedure')
                             break
-                    log.info('Cancellation (R, phi (deg)) = ({:}, {:.3g})'.format(self.afg.ch1.amp_vrms, self.afg.ch1.phase_rad*180/pi))
-                    log.info('Cancellation (X, Y) = ({:.3g}, {:.3g})'.format(self.data['X_cancel'], self.data['Y_cancel']))
+
+                    self.log_cancellation()
+                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
+                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 elif np.median(y_tape) < 0:
                     log.info('Lockin Y channel is large and negative')
@@ -280,9 +314,10 @@ class SQUID_Balancer_v2(Procedure):
                         if self.should_stop():
                             log.warning('Caught the stop flag in the procedure')
                             break
- 
-                    log.info('Cancellation (R, phi (deg)) = ({:}, {:.3g})'.format(self.afg.ch1.amp_vrms, self.afg.ch1.phase_rad*180/pi))
-                    log.info('Cancellation (X, Y) = ({:.3g}, {:.3g})'.format(self.data['X_cancel'], self.data['Y_cancel']))
+                    
+                    self.log_cancellation()
+                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
+                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
             else:
                 self.data_record()
