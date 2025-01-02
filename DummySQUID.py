@@ -109,6 +109,8 @@ class SQUID_Balancer_v2(Procedure):
 
     def tek_signal_query(self, tek_afg:AFG3152C, phase_units='rad'):
         # need to include assertion error for phase_units
+        assert phase_units in ['rad', 'deg']
+
         state = True
         while state:
             try: 
@@ -117,7 +119,16 @@ class SQUID_Balancer_v2(Procedure):
                     phase = tek_afg.ch1.phase_rad
                 else:
                     phase = tek_afg.ch1.phase_deg
+                
+                assert isinstance(amp, float), f"Amplitude is not a float: {type(amp)}"
+                assert isinstance(phase, float), f"Phase is not a float: {type(phase)}"
+
                 state = False
+
+            except AssertionError as ae:
+                log.warning(f"Assertion failed: {ae}. Retrying...")
+                time.sleep(0.1)  
+              
             except Exception as e:
                 log.warning(e)
                 time.sleep(0.1)
@@ -187,8 +198,6 @@ class SQUID_Balancer_v2(Procedure):
 
         log.info('buffer filled')
 
-        # self.initial_amp = self.afg.ch1.amp_vrms
-        # self.initial_phase = self.afg.ch1.phase_rad
         self.initial_amp, self.initial_phase = self.tek_signal_query(self.afg, 'deg')
         xcancel_initial = self.initial_amp * cos(self.initial_phase)
         ycancel_initial = self.initial_amp * sin(self.initial_phase)
@@ -201,7 +210,6 @@ class SQUID_Balancer_v2(Procedure):
         self.t0 = time.time()
 
     def execute(self):
-                
         while True:
             self.x_cancelbuffer.append(self.lockin.x)
             self.y_cancelbuffer.append(self.lockin.y)
@@ -225,7 +233,6 @@ class SQUID_Balancer_v2(Procedure):
                             log.warning(f"Exception occurred during adjustment: {e}. Setting amplitude to floor limit.")
                             self.afg.ch1.amp_vrms = 7e-3  # Set to floor limit
                             continue  # Continue the loop
-                        
                         self.data_record()
 
                         log.debug('RAISING X cancellation')
@@ -236,8 +243,6 @@ class SQUID_Balancer_v2(Procedure):
                             break
 
                     self.log_cancellation()
-                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
-                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 elif np.median(x_tape) < 0:
                     log.info('Lockin X channel is large and negative')
@@ -260,8 +265,6 @@ class SQUID_Balancer_v2(Procedure):
                             break
 
                     self.log_cancellation()
-                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
-                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 self.x_cancelbuffer.append(self.data['X'])
                 self.y_cancelbuffer.append(self.data['Y'])
@@ -291,8 +294,6 @@ class SQUID_Balancer_v2(Procedure):
                             break
 
                     self.log_cancellation()
-                    # log.info('Cancellation (R, phi) = ({:.3e}V, {:.3g}deg)'.format(*self.tek_signal_query(self.afg, 'deg')))
-                    # log.info('Cancellation (X, Y) = ({:.3e}V, {:.3e}V)'.format(self.data['X_cancel'], self.data['Y_cancel']))
 
                 elif np.median(y_tape) < 0:
                     log.info('Lockin Y channel is large and negative')
@@ -307,6 +308,7 @@ class SQUID_Balancer_v2(Procedure):
                             log.warning(f"Exception occurred during adjustment: {e}. Setting amplitude to floor limit.")
                             self.afg.ch1.amp_vrms = 7e-3  # Set to floor limit
                             continue  # Continue the loop                        self.data_record()
+                        self.data_record()
 
                         log.debug('LOWERING Y cancellation')
                         sleep(self.increment_sleep)
