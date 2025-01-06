@@ -175,6 +175,9 @@ class SQUID_Balancer_v2(Procedure):
             self.data_record()
             sleep(self.delay)
 
+            self.x_cancelbuffer.append(self.data['X'])
+            self.y_cancelbuffer.append(self.data['Y'])
+
             if self.should_stop():
                 log.warning('Caught the stop flag in the procedure')
                 break
